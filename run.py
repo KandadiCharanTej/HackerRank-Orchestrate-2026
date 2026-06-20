@@ -35,20 +35,33 @@ OUTPUT_SCHEMA = [
 ]
 
 
-def process_claims():
+def process_claims(input_path=None, output_path=None, history_path=None, req_path=None):
     # 1. Initialize Pipeline Modules
     dataset_dir = Path("dataset")
-    history_path = str(dataset_dir / "user_history.csv")
-    req_path = str(dataset_dir / "evidence_requirements.csv")
+    history_path = history_path or str(dataset_dir / "user_history.csv")
+    req_path = req_path or str(dataset_dir / "evidence_requirements.csv")
+    
+    import os
+    import google.generativeai as genai
     
     context_assembler = ContextAssembler(history_path, req_path)
-    image_analyzer = ImageAnalyzer()  # Uses mock without live model_client
+    
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        logger.info("Initializing Gemini VLM client...")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-3.5-flash')
+        image_analyzer = ImageAnalyzer(model_client=model)
+    else:
+        logger.warning("GEMINI_API_KEY not found. Running ImageAnalyzer in mock mode.")
+        image_analyzer = ImageAnalyzer()  # Uses mock without live model_client
+
     graph_builder = EvidenceGraphBuilder()
     decision_engine = DecisionEngine()
     self_verifier = SelfVerifier()
 
-    input_file = dataset_dir / "claims.csv"
-    output_file = Path("output.csv")
+    input_file = Path(input_path or (dataset_dir / "claims.csv"))
+    output_file = Path(output_path or "output.csv")
     
     if not input_file.exists():
         logger.error(f"Input file not found at {input_file}")
@@ -79,7 +92,8 @@ def process_claims():
                     "issue_hint": parsed_claim.issue_hint.value
                 }
                 for path in image_paths:
-                    obs = image_analyzer.analyze(path, claim_ctx_dict)
+                    full_path = str(dataset_dir / path)
+                    obs = image_analyzer.analyze(full_path, claim_ctx_dict)
                     observations.append(obs)
                 
                 # 4. Build Evidence Graph
@@ -107,12 +121,24 @@ def process_claims():
                 # Combine risk flags
                 final_flags = set(risk_flags_list)
                 final_flags.update(verify_result.additional_flags)
+                for obs in observations:
+                    if obs.quality_issues:
+                        final_flags.update(obs.quality_issues)
                 final_flags_str = ";".join(sorted(list(final_flags))) if final_flags else "none"
                 
                 # Determine justification
                 justification = reason
                 if not verify_result.is_consistent:
                     justification += " | Verification failures: " + " ; ".join(verify_result.contradictions_found)
+
+                sev = parsed_claim.attributes.severity_language
+                if not sev:
+                    if parsed_claim.issue_hint.value == "none":
+                        sev = "none"
+                    elif parsed_claim.issue_hint.value == "unknown":
+                        sev = "unknown"
+                    else:
+                        sev = "medium"
 
                 # 7. Map to Output Schema
                 out_row = {
@@ -129,7 +155,7 @@ def process_claims():
                     "claim_status_justification": justification,
                     "supporting_image_ids": ";".join(verify_result.supporting_image_ids),
                     "valid_image": "true" if verify_result.supporting_image_ids else "false",
-                    "severity": parsed_claim.attributes.severity_language or "unknown"
+                    "severity": sev
                 }
                 
                 # Validate schema
@@ -156,4 +182,16 @@ def process_claims():
 
 
 if __name__ == "__main__":
-    process_claims()
+    import argparse
+    parser = argparse.ArgumentParser(description="Run HackerRank Orchestrate Pipeline")
+    parser.add_argument("--input", default=None, help="Path to input claims CSV (defaults to dataset/claims.csv)")
+    parser.add_argument("--output", default=None, help="Path to output predictions CSV (defaults to output.csv)")
+    parser.add_argument("--history", default=None, help="Path to user history CSV")
+    parser.add_argument("--requirements", default=None, help="Path to evidence requirements CSV")
+    args = parser.parse_args()
+    process_claims(
+        input_path=args.input,
+        output_path=args.output,
+        history_path=args.history,
+        req_path=args.requirements
+    )

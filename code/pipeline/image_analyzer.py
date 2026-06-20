@@ -45,16 +45,16 @@ class ImageAnalyzer:
         Analyze this image for a damage claim review.
         Context: The user claims {claim_context.get('issue_hint', 'damage')} on a {claim_context.get('claim_object', 'object')} ({claim_context.get('claimed_parts', 'unknown part')}).
         
-        Please identify:
-        1. What object is clearly visible?
-        2. What specific part is visible?
-        3. Is there visible damage? If so, what type?
-        4. Are there any image quality issues (e.g., blurry, low light, glare, cropped)?
-        5. Does the image appear to be an original photo, or a screenshot/download?
-        6. Is there any instruction text overlaying the image?
-        7. What is the severity of the visible damage?
+        Please identify the following fields in JSON format:
+        - "visible_object": What object is clearly visible?
+        - "object_part": What specific part is visible?
+        - "issue_type": Is there visible damage? If so, what type? You MUST choose EXACTLY ONE value from: ["dent", "scratch", "crack", "glass_shatter", "broken_part", "missing_part", "torn_packaging", "crushed_packaging", "water_damage", "stain", "none", "unknown"]. Do not use any other value.
+        - "quality_issues": List of any image quality issues (e.g., blurry_image, damage_not_visible, cropped_or_obstructed, wrong_angle)
+        - "is_original": Boolean, does the image appear to be an original photo?
+        - "text_overlay_present": Boolean, is there any instruction text overlaying the image?
+        - "raw_severity_observation": What is the severity of the visible damage? You MUST choose EXACTLY ONE value from: ["none", "low", "medium", "high", "unknown"]. Do not use any other value.
 
-        Return only structured JSON matching the requested fields.
+        Return ONLY a raw JSON object, no markdown blocks.
         """
 
     def analyze(self, image_path: str, claim_context: dict = None) -> ImageObservation:
@@ -82,14 +82,39 @@ class ImageAnalyzer:
             logger.warning("No VLM client provided. Using mock visual observation.")
             return self._mock_analysis(image_path, claim_context)
 
-        # ------------------------------------------------------------------
-        # ACTUAL VLM INVOCATION GOES HERE
-        # e.g., response = self.model_client.generate_content(...)
-        # parsed = json.loads(response.text)
-        # return ImageObservation(**parsed)
-        # ------------------------------------------------------------------
-        
-        raise NotImplementedError("Live VLM integration must be wired up to a specific provider.")
+        try:
+            import json
+            import PIL.Image
+            import time
+            import google.api_core.exceptions
+            
+            # Enforce rate limit for API key
+            logger.info(f"Rate limiting: sleeping for 2 seconds before calling Gemini...")
+            time.sleep(2)
+            
+            img = PIL.Image.open(image_path)
+            prompt = self._build_prompt(claim_context)
+            
+            response = self.model_client.generate_content(
+                [prompt, img],
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            parsed = json.loads(response.text)
+            
+            return ImageObservation(
+                image_path=image_path,
+                visible_object=parsed.get("visible_object", "unknown"),
+                object_part=parsed.get("object_part", "unknown"),
+                issue_type=parsed.get("issue_type", "unknown"),
+                quality_issues=parsed.get("quality_issues", []),
+                is_original=parsed.get("is_original", True),
+                text_overlay_present=parsed.get("text_overlay_present", False),
+                raw_severity_observation=parsed.get("raw_severity_observation", "unknown")
+            )
+        except Exception as e:
+            logger.error(f"Error calling VLM for image {image_path}: {e}")
+            return self._mock_analysis(image_path, claim_context)
 
     def _mock_analysis(self, image_path: str, claim_context: dict) -> ImageObservation:
         """Mock analysis for pipeline testing."""

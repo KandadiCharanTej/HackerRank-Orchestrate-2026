@@ -61,7 +61,9 @@ class SelfVerifier:
         
         for img_id in proposed_supporting_images:
             if img_id not in actual_supporting_images:
-                contradictions.append(f"Image {img_id} claimed as supporting, but graph shows no SUPPORTS edge.")
+                # Removed: An image lacking a SUPPORTS edge does not mean it contradicts the claim.
+                # contradictions.append(f"Image {img_id} claimed as supporting, but graph shows no SUPPORTS edge.")
+                pass
             else:
                 valid_image_ids.add(img_id)
 

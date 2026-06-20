@@ -241,10 +241,18 @@ _COLOR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SIDE_PATTERN = re.compile(r"\b(left|right)\b", re.IGNORECASE)
-_SEVERITY_PHRASES = [
-    "pretty bad", "badly", "severe", "major", "shattered",
-    "minor", "small", "light", "little",
-]
+_SEVERITY_MAPPING: dict[str, str] = {
+    "pretty bad": "high",
+    "badly": "high",
+    "severe": "high",
+    "major": "high",
+    "shattered": "high",
+    "minor": "low",
+    "small": "low",
+    "light": "low",
+    "little": "low",
+}
+
 
 # Negation phrases that disqualify a part mentioned in the same turn.
 _NEGATION_PATTERN = re.compile(
@@ -328,9 +336,9 @@ def _extract_attributes(text: str) -> ClaimAttributes:
     side_m = _SIDE_PATTERN.search(text)
     sev = None
     text_lower = text.lower()
-    for phrase in _SEVERITY_PHRASES:
+    for phrase, mapped_value in _SEVERITY_MAPPING.items():
         if phrase in text_lower:
-            sev = phrase
+            sev = mapped_value
             break
     return ClaimAttributes(
         color=color_m.group(1).lower() if color_m else None,
